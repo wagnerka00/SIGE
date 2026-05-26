@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Equipamentos - SIGE UFPI</title>
+    <link rel="stylesheet" href="../css/main.css" />
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script src="../services/api.js"></script>
+    <script src="../services/auth.js"></script>
+    <script src="../components/toast.js"></script>
+    <script src="../components/loading.js"></script>
+    <script src="../components/modal.js"></script>
+    <script src="../scripts/utils.js"></script>
+    <script src="../layouts/sidebar.js"></script>
+
+    <script>
+      if (!AuthService.requireAuth()) {
+        // requireAuth redireciona.
+      }
+
+      const canWrite = AuthService.canWrite();
+      const canDelete = AuthService.isAdmin();
+
+      let currentPage = 1;
+      let searchTimeout = null;
+
+      initLayout("equipments", "Equipamentos");
+
+      document.getElementById("page-content").innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <h2>Lista de Equipamentos</h2>
+            <div class="filters-bar">
+              <input
+                type="text"
+                id="search"
+                class="form-control"
+                placeholder="Buscar... (patrimônio, nome, marca...)"
+              />
+              <select id="filter-status" class="form-control">
+                <option value="">Todos os status</option>
+                ${Utils.statusOptions()
+                  .map((o) => `<option value="${o.value}">${o.label}</option>`)
+                  .join("")}
+              </select>
+              <input
+                type="text"
+                id="filter-tipo"
+                class="form-control"
+                placeholder="Tipo"
+              />
+              <input
+                type="text"
+                id="filter-localizacao"
+                class="form-control"
+                placeholder="Localização"
+              />
+              ${
+                canWrite
+                  ? `<button class="btn btn-primary" id="btn-new">+ Novo Equipamento</button>`
+                  : ""
+              }
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Patrimônio</th>
+                  <th>Nome</th>
+                  <th>Tipo</th>
+                  <th>Status</th>
+                  <th>Localização</th>
+                  <th style="min-width:160px">Ações</th>
+                </tr>
+              </thead>
+              <tbody id="equipments-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination" id="pagination"></div>
+        </div>
+      `;
+
+      function statusBadge(status) {
+        const opt = Utils.statusOptions().find((o) => o.value === status);
+        const label = opt?.label || status;
+        return `<span class="status-badge status-${status}">${label}</span>`;
+      }
+
+      function equipmentFormHtml(data = {}) {
+        const opts = Utils.statusOptions()
+          .map(
+            (o) =>
+              `<option value="${o.value}" ${
+                data.status === o.value ? "selected" : ""
+              }>${o.label}</option>`
+          )
+          .join("");
+
+        const isDiscarded = data?.status === "descartado";
+        const readonly = isDiscarded && data?.id;
+        const disabled = readonly ? "disabled" : "";
+
+        return `
+          <form id="equipment-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Patrimônio <span style="color:#dc2626">*</span></label>
+                <input
+                  name="patrimonio"
+                  class="form-control"
+                  value="${data.patrimonio || ""}"
+                  required
+                  ${readonly ? "disabled" : ""}
+                />
+              </div>
+              <div class="form-group">
+                <label>Nome <span style="color:#dc2626">*</span></label>
+                <input
+                  name="nome"
+                  class="form-control"
+                  value="${data.nome || ""}"
+                  required
+                  ${disabled}
+                />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Tipo <span style="color:#dc2626">*</span></label>
+                <input
+                  name="tipo"
+                  class="form-control"
+                  value="${data.tipo || ""}"
+                  required
+                  ${disabled}
+                />
+              </div>
+              <div class="form-group">
+                <label>Status <span style="color:#dc2626">*</span></label>
+                <select name="status" class="form-control" required ${disabled}>
+                  ${opts}
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Marca</label>
+                <input name="marca" class="form-control" value="${data.marca || ""}" ${disabled} />
+              </div>
+              <div class="form-group">
+                <label>Modelo</label>
+                <input name="modelo" class="form-control" value="${data.modelo || ""}" ${disabled} />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Número de Série</label>
+                <input
+                  name="numero_serie"
+                  class="form-control"
+                  value="${data.numero_serie || ""}"
+                  ${disabled}
+                />
+              </div>
+              <div class="form-group">
+                <label>Localização <span style="color:#dc2626">*</span></label>
+                <input
+                  name="localizacao"
+                  class="form-control"
+                  value="${data.localizacao || ""}"
+                  required
+                  ${disabled}
+                />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Responsável</label>
+                <input
+                  name="responsavel"
+                  class="form-control"
+                  value="${data.responsavel || ""}"
+                  ${disabled}
+                />
+              </div>
+              <div class="form-group">
+                <label>Observações</label>
+                <textarea
+                  name="observacoes"
+                  class="form-control"
+                  ${disabled}
+                >${data.observacoes || ""}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      }
+
+      function getFormData(form) {
+        const fd = new FormData(form);
+        const obj = {};
+        fd.forEach((v, k) => {
+          obj[k] = v;
+        });
+        return obj;
+      }
+
+      function openEquipmentModal(title, data = {}) {
+        const isDiscarded = data?.status === "descartado" && data?.id;
+        const footer = isDiscarded
+          ? `<button class="btn btn-secondary" data-close-modal>Fechar</button>`
+          : `
+              <button class="btn btn-secondary" data-close-modal>Cancelar</button>
+              <button class="btn btn-primary" id="save-equipment">Salvar</button>
+            `;
+
+        const modal = Modal.open(title, equipmentFormHtml(data), footer);
+        modal.querySelectorAll("[data-close-modal]").forEach((b) => {
+          b.onclick = () => Modal.close();
+        });
+
+        if (!isDiscarded) {
+          modal.querySelector("#save-equipment").onclick = async () => {
+            const form = modal.querySelector("#equipment-form");
+            if (!form.checkValidity()) {
+              form.reportValidity();
+              return;
+            }
+
+            const payload = getFormData(form);
+            Loading.show();
+            try {
+              if (data?.id) {
+                await ApiService.put(`/equipments/${data.id}`, payload);
+                Toast.success("Equipamento atualizado com sucesso!");
+              } else {
+                await ApiService.post("/equipments", payload);
+                Toast.success("Equipamento cadastrado com sucesso!");
+              }
+              Modal.close();
+              loadEquipments(currentPage);
+            } catch (err) {
+              Toast.error(Utils.getApiErrorMessage(err));
+            } finally {
+              Loading.hide();
+            }
+          };
+        }
+      }
+
+      async function viewEquipment(id) {
+        Loading.show();
+        try {
+          const res = await ApiService.get(`/equipments/${id}`);
+          if (!res?.success) {
+            Toast.error(res?.message || "Falha ao obter equipamento");
+            return;
+          }
+
+          const eq = res.data;
+          const bodyHtml = `
+            <div class="form-row" style="grid-template-columns: 1fr 1fr;">
+              <div class="card" style="box-shadow:none;border:none;background:transparent;">
+                <div class="card-body" style="padding:0;">
+                  <div class="detail-grid">
+                    ${[
+                      ["Patrimônio", eq.patrimonio],
+                      ["Nome", eq.nome],
+                      ["Tipo", eq.tipo],
+                      ["Marca", eq.marca || "-"],
+                      ["Modelo", eq.modelo || "-"],
+                      ["Número de Série", eq.numero_serie || "-"],
+                      ["Status", eq.status_label || eq.status],
+                      ["Localização", eq.localizacao],
+                      ["Responsável", eq.responsavel || "-"],
+                      ["Data de Cadastro", Utils.formatDate(eq.created_at)],
+                      ["Observações", eq.observacoes || "-"],
+                    ]
+                      .map(
+                        ([label, value]) => `
+                          <div class="detail-item">
+                            <label>${label}</label>
+                            <p>${String(value)}</p>
+                          </div>
+                        `
+                      )
+                      .join("")}
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+          const modal = Modal.open(
+            `Equipamento ${eq.patrimonio}`,
+            bodyHtml,
+            `<button class="btn btn-secondary" data-close-modal>Fechar</button>`
+          );
+          modal.querySelectorAll("[data-close-modal]").forEach((b) => {
+            b.onclick = () => Modal.close();
+          });
+        } catch (err) {
+          Toast.error(Utils.getApiErrorMessage(err));
+        } finally {
+          Loading.hide();
+        }
+      }
+
+      async function editEquipment(id) {
+        Loading.show();
+        try {
+          const res = await ApiService.get(`/equipments/${id}`);
+          if (!res?.success) {
+            Toast.error(res?.message || "Falha ao obter equipamento");
+            return;
+          }
+          openEquipmentModal("Editar Equipamento", res.data);
+        } catch (err) {
+          Toast.error(Utils.getApiErrorMessage(err));
+        } finally {
+          Loading.hide();
+        }
+      }
+
+      async function deleteEquipment(id) {
+        if (!confirm("Deseja excluir este equipamento? (exclusão lógica)")) return;
+        Loading.show();
+        try {
+          await ApiService.delete(`/equipments/${id}`);
+          Toast.success("Equipamento removido com sucesso!");
+          loadEquipments(currentPage);
+        } catch (err) {
+          Toast.error(Utils.getApiErrorMessage(err));
+        } finally {
+          Loading.hide();
+        }
+      }
+
+      function renderPagination(p) {
+        const pages = p.pages || 1;
+        const el = document.getElementById("pagination");
+        el.innerHTML = `
+          <span class="pagination-info">Página ${p.page} de ${pages} (${p.total} registros)</span>
+          <button class="btn btn-secondary btn-sm" ${
+            p.page <= 1 ? "disabled" : ""
+          } data-page="${p.page - 1}">Anterior</button>
+          <button class="btn btn-secondary btn-sm" ${
+            p.page >= pages ? "disabled" : ""
+          } data-page="${p.page + 1}">Próxima</button>
+        `;
+
+        el.querySelectorAll("[data-page]").forEach((btn) => {
+          btn.onclick = () => loadEquipments(parseInt(btn.dataset.page, 10));
+        });
+      }
+
+      async function loadEquipments(page = 1) {
+        currentPage = page;
+        Loading.show();
+
+        try {
+          const search = document.getElementById("search").value || undefined;
+          const status = document.getElementById("filter-status").value || undefined;
+          const tipo = document.getElementById("filter-tipo").value || undefined;
+          const localizacao = document.getElementById("filter-localizacao").value || undefined;
+
+          const res = await ApiService.get("/equipments", {
+            page,
+            search,
+            status,
+            tipo,
+            localizacao,
+          });
+
+          if (!res?.success) {
+            Toast.error(res?.message || "Falha ao carregar equipamentos");
+            return;
+          }
+
+          const { items, pagination } = res.data;
+          const tbody = document.getElementById("equipments-tbody");
+
+          if (!items?.length) {
+            tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Nenhum equipamento encontrado</td></tr>`;
+          } else {
+            tbody.innerHTML = items
+              .map(
+                (eq) => `
+                  <tr>
+                    <td><strong>${eq.patrimonio}</strong></td>
+                    <td>${eq.nome}</td>
+                    <td>${eq.tipo}</td>
+                    <td>${statusBadge(eq.status)}</td>
+                    <td>${eq.localizacao}</td>
+                    <td>
+                      <div class="actions-cell">
+                        <button class="btn btn-secondary btn-sm btn-icon" data-view="${eq.id}" title="Visualizar">👁</button>
+                        ${
+                          canWrite
+                            ? `<button class="btn btn-primary btn-sm btn-icon" data-edit="${eq.id}" title="Editar">✏</button>`
+                            : ""
+                        }
+                        ${
+                          canDelete
+                            ? `<button class="btn btn-danger btn-sm btn-icon" data-delete="${eq.id}" title="Excluir">🗑</button>`
+                            : ""
+                        }
+                      </div>
+                    </td>
+                  </tr>
+                `
+              )
+              .join("");
+          }
+
+          renderPagination(pagination);
+
+          tbody.querySelectorAll("[data-view]").forEach((b) =>
+            (b.onclick = () => viewEquipment(b.dataset.view))
+          );
+          tbody.querySelectorAll("[data-edit]").forEach((b) =>
+            (b.onclick = () => editEquipment(b.dataset.edit))
+          );
+          tbody.querySelectorAll("[data-delete]").forEach((b) =>
+            (b.onclick = () => deleteEquipment(b.dataset.delete))
+          );
+        } catch (err) {
+          Toast.error(Utils.getApiErrorMessage(err));
+        } finally {
+          Loading.hide();
+        }
+      }
+
+      // Filtros
+      document.getElementById("search").addEventListener(
+        "input",
+        () => {
+          clearTimeout(searchTimeout);
+          searchTimeout = setTimeout(() => loadEquipments(1), 400);
+        }
+      );
+
+      ["filter-status", "filter-tipo", "filter-localizacao"].forEach((id) => {
+        document.getElementById(id).addEventListener("change", () => loadEquipments(1));
+        document.getElementById(id).addEventListener("keyup", (e) => {
+          if (e.key === "Enter") loadEquipments(1);
+        });
+      });
+
+      if (canWrite) {
+        document.getElementById("btn-new").onclick = () =>
+          openEquipmentModal("Novo Equipamento", {});
+      } else {
+        document.getElementById("btn-new")?.remove();
+      }
+
+      loadEquipments();
+    </script>
+  </body>
+</html>
+

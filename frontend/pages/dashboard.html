@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - SIGE UFPI</title>
+    <link rel="stylesheet" href="../css/main.css" />
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script src="../services/api.js"></script>
+    <script src="../services/auth.js"></script>
+    <script src="../components/toast.js"></script>
+    <script src="../components/loading.js"></script>
+    <script src="../scripts/utils.js"></script>
+    <script src="../layouts/sidebar.js"></script>
+
+    <script>
+      if (!AuthService.requireAuth()) {
+        // requireAuth redireciona.
+      }
+
+      initLayout("dashboard", "Dashboard");
+
+      document.getElementById("page-content").innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card total">
+            <div class="stat-icon">📦</div>
+            <div class="stat-value" id="stat-total">-</div>
+            <div class="stat-label">Total de Equipamentos</div>
+          </div>
+          <div class="stat-card maintenance">
+            <div class="stat-icon">🔧</div>
+            <div class="stat-value" id="stat-maintenance">-</div>
+            <div class="stat-label">Em Manutenção</div>
+          </div>
+          <div class="stat-card available">
+            <div class="stat-icon">✅</div>
+            <div class="stat-value" id="stat-available">-</div>
+            <div class="stat-label">Disponíveis</div>
+          </div>
+          <div class="stat-card reserved">
+            <div class="stat-icon">📋</div>
+            <div class="stat-value" id="stat-reserved">-</div>
+            <div class="stat-label">Reservados</div>
+          </div>
+        </div>
+        <div class="charts-grid">
+          <div class="card">
+            <div class="card-header"><h2>Equipamentos por Status</h2></div>
+            <div class="card-body">
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr><th>Status</th><th>Quantidade</th></tr>
+                  </thead>
+                  <tbody id="status-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2>Equipamentos por Setor</h2></div>
+            <div class="card-body">
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr><th>Setor (Localização)</th><th>Quantidade</th></tr>
+                  </thead>
+                  <tbody id="location-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      let lastStats = null;
+
+      function renderStatusTable(stats) {
+        const tbody = document.getElementById("status-tbody");
+        const rows = Object.entries(stats.by_status || {}).map(([key, count]) => {
+          const label = Utils.statusOptions().find((o) => o.value === key)?.label || key;
+          return `<tr>
+            <td>${label}</td>
+            <td><strong>${count}</strong></td>
+          </tr>`;
+        });
+        tbody.innerHTML = rows.length
+          ? rows.join("")
+          : `<tr><td colspan="2" class="empty-state">Sem dados</td></tr>`;
+      }
+
+      function renderLocationTable(stats) {
+        const tbody = document.getElementById("location-tbody");
+        const rows = Object.entries(stats.by_localizacao || {}).map(([loc, count]) => {
+          return `<tr>
+            <td>${loc}</td>
+            <td><strong>${count}</strong></td>
+          </tr>`;
+        });
+        tbody.innerHTML = rows.length
+          ? rows.join("")
+          : `<tr><td colspan="2" class="empty-state">Sem dados</td></tr>`;
+      }
+
+      async function loadDashboard() {
+        Loading.show();
+        try {
+          const res = await ApiService.get("/dashboard/stats");
+          if (!res?.success) {
+            Toast.error(res?.message || "Falha ao carregar dashboard");
+            return;
+          }
+
+          const stats = res.data;
+          lastStats = stats;
+
+          document.getElementById("stat-total").textContent = stats.total ?? "-";
+          document.getElementById("stat-maintenance").textContent =
+            stats.em_manutencao ?? "-";
+          document.getElementById("stat-available").textContent = stats.disponiveis ?? "-";
+          document.getElementById("stat-reserved").textContent = stats.reservados ?? "-";
+
+          renderStatusTable(stats);
+          renderLocationTable(stats);
+        } catch (err) {
+          Toast.error(Utils.getApiErrorMessage(err));
+        } finally {
+          Loading.hide();
+        }
+      }
+
+      loadDashboard();
+    </script>
+  </body>
+</html>
+
